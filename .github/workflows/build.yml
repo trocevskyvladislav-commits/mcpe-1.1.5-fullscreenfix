@@ -1,7 +1,7 @@
 name: Build Dylib
 
 on:
-push:
+  push:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
@@ -25,5 +25,6 @@ jobs:
         with:
           name: FullscreenFix
           path: FullscreenFix.dylib
+
 
 
