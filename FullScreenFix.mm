@@ -13,7 +13,6 @@ static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledS
 
 @implementation UIView (EAGLFix)
 
-// Принудительное назначение корректного Scale Factor для Viewport OpenGL
 - (void)fake_didMoveToWindow {
     [self fake_didMoveToWindow];
     if ([self isKindOfClass:NSClassFromString(@"EAGLView")]) {
@@ -26,9 +25,10 @@ static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledS
 
 @implementation CALayer (EAGLFixLayer)
 
-// Фикс слоя CAEAGLLayer для предотвращения нулевых Framebuffer
 - (void)fake_setBounds:(CGRect)bounds {
-    if ([self isKindOfClass:[CAEAGLLayer class]]) {
+    // Безопасная динамическая проверка класса без жестких ссылок на OpenGLES
+    Class eaglLayerClass = NSClassFromString(@"CAEAGLLayer");
+    if (eaglLayerClass && [self isKindOfClass:eaglLayerClass]) {
         CGRect screenBounds = [UIScreen mainScreen].nativeBounds;
         CGFloat scale = [UIScreen mainScreen].nativeScale;
         if (scale > 0) {
@@ -43,10 +43,11 @@ static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledS
 __attribute__((constructor))
 static void init_fullscreen_fix(void) {
     @autoreleasepool {
-        // Swizzle UIView (EAGLView)
         swizzleMethod([UIView class], @selector(didMoveToWindow), @selector(fake_didMoveToWindow));
         
-        // Swizzle CALayer (CAEAGLLayer)
-        swizzleMethod([CALayer class], @selector(setBounds:), @selector(fake_setBounds:));
+        Class calayerClass = NSClassFromString(@"CALayer");
+        if (calayerClass) {
+            swizzleMethod(calayerClass, @selector(setBounds:), @selector(fake_setBounds:));
+        }
     }
 }
