@@ -1,31 +1,12 @@
-name: Build MCPE-103399 Dylib
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Create MCPE-103399.mm
         run: |
           cat << 'EOF' > MCPE-103399.mm
           #import <Foundation/Foundation.h>
           #import <dlfcn.h>
 
-          // Объявляем C-интерфейс для Dobby / CydiaSubstrate хукера
-          extern "C" {
-              int DobbyHook(void *function_address, void *replace_call, void **origin_call);
-              void MSHookFunction(void *symbol, void *replace, void **result) __attribute__((weak_import));
-          }
+          // Определение типов функций-хукеров для вызова по указателю
+          typedef int (*DobbyHookFn)(void *function_address, void *replace_call, void **origin_call);
+          typedef void (*MSHookFunctionFn)(void *symbol, void *replace, void **result);
 
           // Указатели на оригинальные C++ функции MCPE 1.1.5
           bool (*orig_SignItem_useOn)(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ);
@@ -57,18 +38,30 @@ jobs:
               return result;
           }
 
-          // Вспомогательная функция универсального хука
-          void install_hook(void* target, void* replace, void** origin) {
-              if (&MSHookFunction != NULL) {
-                  MSHookFunction(target, replace, origin);
-              } else {
-                  DobbyHook(target, replace, origin);
+          // Вспомогательная функция для безопасного хукинга
+          bool install_hook(void* target, void* replace, void** origin) {
+              if (!target) return false;
+
+              // 1. Пробуем найти DobbyHook в памяти процесса
+              DobbyHookFn dobby = (DobbyHookFn)dlsym(RTLD_DEFAULT, "DobbyHook");
+              if (dobby) {
+                  dobby(target, replace, origin);
+                  return true;
               }
+
+              // 2. Если Dobby нет, пробуем MSHookFunction (Substrate/Cydia)
+              MSHookFunctionFn substrate = (MSHookFunctionFn)dlsym(RTLD_DEFAULT, "MSHookFunction");
+              if (substrate) {
+                  substrate(target, replace, origin);
+                  return true;
+              }
+
+              return false;
           }
 
           __attribute__((constructor))
           static void init_mcpe103399_patch() {
-              // Поиск C++ символов прямо через системный dlsym
+              // Поиск C++ символов MCPE 1.1.5 в памяти
               void* signUseOnSym     = dlsym(RTLD_DEFAULT, "__NK8SignItem5useOnER9ItemStackR6PlayeriiiEfff");
               void* canBeReplacedSym = dlsym(RTLD_DEFAULT, "__NK5Block14canBeReplacedER11BlockSourceiii");
               void* getIdSym         = dlsym(RTLD_DEFAULT, "__NK5Block5getIdEv");
@@ -83,18 +76,3 @@ jobs:
               }
           }
           EOF
-
-      - name: Compile Dylib
-        run: |
-          xcrun -sdk iphoneos clang++ -dynamiclib -Wall \
-          -arch arm64 \
-          -std=c++14 \
-          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-          -framework Foundation \
-          MCPE-103399.mm -o MCPE-103399.dylib
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MCPE-103399-dylib
-          path: MCPE-103399.dylib
