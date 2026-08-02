@@ -19,8 +19,13 @@ jobs:
         run: |
           cat << 'EOF' > MCPE-103399.mm
           #import <Foundation/Foundation.h>
-          #import <objc/runtime.h>
+          #import <dlfcn.h>
 
+          // Объявляем C-интерфейс для Dobby / CydiaSubstrate хукера
+          extern "C" {
+              int DobbyHook(void *function_address, void *replace_call, void **origin_call);
+              void MSHookFunction(void *symbol, void *replace, void **result) __attribute__((weak_import));
+          }
 
           // Указатели на оригинальные C++ функции MCPE 1.1.5
           bool (*orig_SignItem_useOn)(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ);
@@ -28,25 +33,23 @@ jobs:
           int  (*orig_Block_getId)(void* block);
 
           static bool g_IsPlacingSign = false;
-
-          // ID Бедрока в 1.1.5
           #define BEDROCK_ID 7
 
-          // 1. Подмена проверки замены блока
+          // 1. Перехват проверки замены блока
           bool hook_Block_canBeReplaced(void* block, void* region, int x, int y, int z) {
               if (g_IsPlacingSign) {
                   if (block != NULL && orig_Block_getId != NULL) {
                       int blockId = orig_Block_getId(block);
                       if (blockId == BEDROCK_ID) {
-                          return false; // Бедрок защищаем от замены
+                          return false; // Бедрок защищен
                       }
                   }
-                  return true; // Разрешаем заменять любые другие блоки
+                  return true; // Остальные блоки разрешаем замещать
               }
               return orig_Block_canBeReplaced(block, region, x, y, z);
           }
 
-          // 2. Подмена вызова установки таблички
+          // 2. Перехват использования таблички
           bool hook_SignItem_useOn(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ) {
               g_IsPlacingSign = true;
               bool result = orig_SignItem_useOn(self, itemStack, player, x, y, z, face, clickX, clickY, clickZ);
@@ -54,19 +57,29 @@ jobs:
               return result;
           }
 
+          // Вспомогательная функция универсального хука
+          void install_hook(void* target, void* replace, void** origin) {
+              if (&MSHookFunction != NULL) {
+                  MSHookFunction(target, replace, origin);
+              } else {
+                  DobbyHook(target, replace, origin);
+              }
+          }
+
           __attribute__((constructor))
           static void init_mcpe103399_patch() {
-              void* signUseOnSym     = (void*)MSFindSymbol(NULL, "__NK8SignItem5useOnER9ItemStackR6PlayeriiiEfff");
-              void* canBeReplacedSym = (void*)MSFindSymbol(NULL, "__NK5Block14canBeReplacedER11BlockSourceiii");
-              void* getIdSym         = (void*)MSFindSymbol(NULL, "__NK5Block5getIdEv");
+              // Поиск C++ символов прямо через системный dlsym
+              void* signUseOnSym     = dlsym(RTLD_DEFAULT, "__NK8SignItem5useOnER9ItemStackR6PlayeriiiEfff");
+              void* canBeReplacedSym = dlsym(RTLD_DEFAULT, "__NK5Block14canBeReplacedER11BlockSourceiii");
+              void* getIdSym         = dlsym(RTLD_DEFAULT, "__NK5Block5getIdEv");
 
               if (getIdSym) {
                   orig_Block_getId = (int (*)(void*))getIdSym;
               }
 
               if (signUseOnSym && canBeReplacedSym) {
-                  MSHookFunction(signUseOnSym, (void*)&hook_SignItem_useOn, (void**)&orig_SignItem_useOn);
-                  MSHookFunction(canBeReplacedSym, (void*)&hook_Block_canBeReplaced, (void**)&orig_Block_canBeReplaced);
+                  install_hook(signUseOnSym, (void*)&hook_SignItem_useOn, (void**)&orig_SignItem_useOn);
+                  install_hook(canBeReplacedSym, (void*)&hook_Block_canBeReplaced, (void**)&orig_Block_canBeReplaced);
               }
           }
           EOF
