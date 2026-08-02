@@ -1,59 +1,34 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
 
-// Оригинальные функции
-static void (*orig_didMoveToWindow)(id, SEL);
-static void (*orig_setBounds)(id, SEL, CGRect);
+// Объявление типа функции glViewport
+typedef void (*glViewportFunc)(int x, int y, int width, int height);
+static glViewportFunc orig_glViewport = NULL;
 
-// ПерехватdidMoveToWindow для UIView (EAGLView)
-static void custom_didMoveToWindow(id self, SEL _cmd) {
-    orig_didMoveToWindow(self, _cmd);
+// Перехваченный glViewport
+void my_glViewport(int x, int y, int width, int height) {
+    // Если игра пытается выставить нулевой или кривой Viewport после логотипа
+    if (width <= 0 || height <= 0) {
+        CGRect mainBounds = [UIScreen mainScreen].nativeBounds;
+        width = (int)mainBounds.size.width;
+        height = (int)mainBounds.size.height;
+    }
     
-    Class eaglViewClass = NSClassFromString(@"EAGLView");
-    if (eaglViewClass && [self isKindOfClass:eaglViewClass]) {
-        UIView *view = (UIView *)self;
-        view.contentScaleFactor = [UIScreen mainScreen].nativeScale;
-        view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // Вызываем оригинальный glViewport с правильными размерами
+    if (orig_glViewport) {
+        orig_glViewport(x, y, width, height);
     }
-}
-
-// Перехват setBounds для CALayer (CAEAGLLayer)
-static void custom_setBounds(id self, SEL _cmd, CGRect bounds) {
-    Class eaglLayerClass = NSClassFromString(@"CAEAGLLayer");
-    if (eaglLayerClass && [self isKindOfClass:eaglLayerClass]) {
-        CGRect screenBounds = [UIScreen mainScreen].nativeBounds;
-        CGFloat scale = [UIScreen mainScreen].nativeScale;
-        if (scale > 0) {
-            bounds = CGRectMake(0, 0, screenBounds.size.width / scale, screenBounds.size.height / scale);
-        }
-    }
-    orig_setBounds(self, _cmd, bounds);
 }
 
 __attribute__((constructor))
-static void init_fullscreen_fix(void) {
+static void init_opengl_hook(void) {
     @autoreleasepool {
-        // Swizzle UIView - didMoveToWindow
-        Class uiViewClass = NSClassFromString(@"UIView");
-        if (uiViewClass) {
-            SEL sel = @selector(didMoveToWindow);
-            Method m = class_getInstanceMethod(uiViewClass, sel);
-            if (m) {
-                orig_didMoveToWindow = (void (*)(id, SEL))method_getImplementation(m);
-                method_setImplementation(m, (IMP)custom_didMoveToWindow);
-            }
-        }
-        
-        // Swizzle CALayer - setBounds:
-        Class caLayerClass = NSClassFromString(@"CALayer");
-        if (caLayerClass) {
-            SEL sel = @selector(setBounds:);
-            Method m = class_getInstanceMethod(caLayerClass, sel);
-            if (m) {
-                orig_setBounds = (void (*)(id, SEL, CGRect))method_getImplementation(m);
-                method_setImplementation(m, (IMP)custom_setBounds);
-            }
+        // Подгружаем символ glViewport из системного OpenGLES фреймворка
+        void* libgles = dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_LAZY);
+        if (libgles) {
+            orig_glViewport = (glViewportFunc)dlsym(libgles, "glViewport");
         }
     }
 }
