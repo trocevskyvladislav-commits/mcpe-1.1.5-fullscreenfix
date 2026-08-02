@@ -1,34 +1,26 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#include <dlfcn.h>
-#include <mach-o/dyld.h>
+#import <objc/runtime.h>
 
-// Объявление типа функции glViewport
-typedef void (*glViewportFunc)(int x, int y, int width, int height);
-static glViewportFunc orig_glViewport = NULL;
+static CGRect (*orig_bounds)(id, SEL);
 
-// Перехваченный glViewport
-void my_glViewport(int x, int y, int width, int height) {
-    // Если игра пытается выставить нулевой или кривой Viewport после логотипа
-    if (width <= 0 || height <= 0) {
-        CGRect mainBounds = [UIScreen mainScreen].nativeBounds;
-        width = (int)mainBounds.size.width;
-        height = (int)mainBounds.size.height;
+static CGRect custom_bounds(id self, SEL _cmd) {
+    // Если запрос идет к главному экрану, отдаем корректные 16:9
+    if (self == [UIScreen mainScreen]) {
+        return CGRectMake(0, 0, 667, 375); // Landscape 16:9
     }
-    
-    // Вызываем оригинальный glViewport с правильными размерами
-    if (orig_glViewport) {
-        orig_glViewport(x, y, width, height);
-    }
+    return orig_bounds(self, _cmd);
 }
 
 __attribute__((constructor))
-static void init_opengl_hook(void) {
+static void init_screen_fix(void) {
     @autoreleasepool {
-        // Подгружаем символ glViewport из системного OpenGLES фреймворка
-        void* libgles = dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_LAZY);
-        if (libgles) {
-            orig_glViewport = (glViewportFunc)dlsym(libgles, "glViewport");
+        Class screenClass = [UIScreen class];
+        SEL sel = @selector(bounds);
+        Method m = class_getInstanceMethod(screenClass, sel);
+        if (m) {
+            orig_bounds = (CGRect (*)(id, SEL))method_getImplementation(m);
+            method_setImplementation(m, (IMP)custom_bounds);
         }
     }
 }
