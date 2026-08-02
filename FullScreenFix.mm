@@ -1,32 +1,25 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
-static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledSelector) {
-    Method originalMethod = class_getInstanceMethod(targetClass, originalSelector);
-    Method swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector);
-    if (originalMethod && swizzledMethod) {
-        method_exchangeImplementations(originalMethod, swizzledMethod);
+// Оригинальные функции
+static void (*orig_didMoveToWindow)(id, SEL);
+static void (*orig_setBounds)(id, SEL, CGRect);
+
+// ПерехватdidMoveToWindow для UIView (EAGLView)
+static void custom_didMoveToWindow(id self, SEL _cmd) {
+    orig_didMoveToWindow(self, _cmd);
+    
+    Class eaglViewClass = NSClassFromString(@"EAGLView");
+    if (eaglViewClass && [self isKindOfClass:eaglViewClass]) {
+        UIView *view = (UIView *)self;
+        view.contentScaleFactor = [UIScreen mainScreen].nativeScale;
+        view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     }
 }
 
-@implementation UIView (EAGLFix)
-
-- (void)fake_didMoveToWindow {
-    [self fake_didMoveToWindow];
-    if ([self isKindOfClass:NSClassFromString(@"EAGLView")]) {
-        self.contentScaleFactor = [UIScreen mainScreen].nativeScale;
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    }
-}
-
-@end
-
-@implementation CALayer (EAGLFixLayer)
-
-- (void)fake_setBounds:(CGRect)bounds {
-    // Безопасная динамическая проверка класса без жестких ссылок на OpenGLES
+// Перехват setBounds для CALayer (CAEAGLLayer)
+static void custom_setBounds(id self, SEL _cmd, CGRect bounds) {
     Class eaglLayerClass = NSClassFromString(@"CAEAGLLayer");
     if (eaglLayerClass && [self isKindOfClass:eaglLayerClass]) {
         CGRect screenBounds = [UIScreen mainScreen].nativeBounds;
@@ -35,19 +28,32 @@ static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledS
             bounds = CGRectMake(0, 0, screenBounds.size.width / scale, screenBounds.size.height / scale);
         }
     }
-    [self fake_setBounds:bounds];
+    orig_setBounds(self, _cmd, bounds);
 }
-
-@end
 
 __attribute__((constructor))
 static void init_fullscreen_fix(void) {
     @autoreleasepool {
-        swizzleMethod([UIView class], @selector(didMoveToWindow), @selector(fake_didMoveToWindow));
+        // Swizzle UIView - didMoveToWindow
+        Class uiViewClass = NSClassFromString(@"UIView");
+        if (uiViewClass) {
+            SEL sel = @selector(didMoveToWindow);
+            Method m = class_getInstanceMethod(uiViewClass, sel);
+            if (m) {
+                orig_didMoveToWindow = (void (*)(id, SEL))method_getImplementation(m);
+                method_setImplementation(m, (IMP)custom_didMoveToWindow);
+            }
+        }
         
-        Class calayerClass = NSClassFromString(@"CALayer");
-        if (calayerClass) {
-            swizzleMethod(calayerClass, @selector(setBounds:), @selector(fake_setBounds:));
+        // Swizzle CALayer - setBounds:
+        Class caLayerClass = NSClassFromString(@"CALayer");
+        if (caLayerClass) {
+            SEL sel = @selector(setBounds:);
+            Method m = class_getInstanceMethod(caLayerClass, sel);
+            if (m) {
+                orig_setBounds = (void (*)(id, SEL, CGRect))method_getImplementation(m);
+                method_setImplementation(m, (IMP)custom_setBounds);
+            }
         }
     }
 }
