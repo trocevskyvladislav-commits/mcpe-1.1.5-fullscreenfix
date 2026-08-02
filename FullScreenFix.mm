@@ -2,10 +2,10 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// Резервный метод для подмены реализации (Method Swizzling)
-static void swizzleMethod(Class class, SEL originalSelector, SEL swizzledSelector) {
-    Method originalMethod = class_getInstanceMethod(class, originalSelector);
-    Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
+// Переименовали 'class' в 'targetClass', чтобы не было конфликта с C++
+static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledSelector) {
+    Method originalMethod = class_getInstanceMethod(targetClass, originalSelector);
+    Method swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector);
     if (originalMethod && swizzledMethod) {
         method_exchangeImplementations(originalMethod, swizzledMethod);
     }
@@ -58,4 +58,3 @@ static void init_fullscreen_fix(void) {
         swizzleMethod(viewClass, @selector(frame), @selector(fake_frame));
     }
 }
-
