@@ -1,14 +1,29 @@
-- name: Create MCPE-103399.mm
-      run: |
+name: Build MCPE-103399 Dylib
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create MCPE-103399.mm
+        run: |
           cat << 'EOF' > MCPE-103399.mm
           #import <Foundation/Foundation.h>
           #import <dlfcn.h>
 
-          // Определение типов функций-хукеров для вызова по указателю
           typedef int (*DobbyHookFn)(void *function_address, void *replace_call, void **origin_call);
           typedef void (*MSHookFunctionFn)(void *symbol, void *replace, void **result);
 
-          // Указатели на оригинальные C++ функции MCPE 1.1.5
           bool (*orig_SignItem_useOn)(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ);
           bool (*orig_Block_canBeReplaced)(void* block, void* region, int x, int y, int z);
           int  (*orig_Block_getId)(void* block);
@@ -16,21 +31,19 @@
           static bool g_IsPlacingSign = false;
           #define BEDROCK_ID 7
 
-          // 1. Перехват проверки замены блока
           bool hook_Block_canBeReplaced(void* block, void* region, int x, int y, int z) {
               if (g_IsPlacingSign) {
                   if (block != NULL && orig_Block_getId != NULL) {
                       int blockId = orig_Block_getId(block);
                       if (blockId == BEDROCK_ID) {
-                          return false; // Бедрок защищен
+                          return false;
                       }
                   }
-                  return true; // Остальные блоки разрешаем замещать
+                  return true;
               }
               return orig_Block_canBeReplaced(block, region, x, y, z);
           }
 
-          // 2. Перехват использования таблички
           bool hook_SignItem_useOn(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ) {
               g_IsPlacingSign = true;
               bool result = orig_SignItem_useOn(self, itemStack, player, x, y, z, face, clickX, clickY, clickZ);
@@ -38,18 +51,15 @@
               return result;
           }
 
-          // Вспомогательная функция для безопасного хукинга
           bool install_hook(void* target, void* replace, void** origin) {
               if (!target) return false;
 
-              // 1. Пробуем найти DobbyHook в памяти процесса
               DobbyHookFn dobby = (DobbyHookFn)dlsym(RTLD_DEFAULT, "DobbyHook");
               if (dobby) {
                   dobby(target, replace, origin);
                   return true;
               }
 
-              // 2. Если Dobby нет, пробуем MSHookFunction (Substrate/Cydia)
               MSHookFunctionFn substrate = (MSHookFunctionFn)dlsym(RTLD_DEFAULT, "MSHookFunction");
               if (substrate) {
                   substrate(target, replace, origin);
@@ -61,7 +71,6 @@
 
           __attribute__((constructor))
           static void init_mcpe103399_patch() {
-              // Поиск C++ символов MCPE 1.1.5 в памяти
               void* signUseOnSym     = dlsym(RTLD_DEFAULT, "__NK8SignItem5useOnER9ItemStackR6PlayeriiiEfff");
               void* canBeReplacedSym = dlsym(RTLD_DEFAULT, "__NK5Block14canBeReplacedER11BlockSourceiii");
               void* getIdSym         = dlsym(RTLD_DEFAULT, "__NK5Block5getIdEv");
@@ -76,3 +85,18 @@
               }
           }
           EOF
+
+      - name: Compile Dylib
+        run: |
+          xcrun -sdk iphoneos clang++ -dynamiclib -Wall \
+          -arch arm64 \
+          -std=c++14 \
+          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -framework Foundation \
+          MCPE-103399.mm -o MCPE-103399.dylib
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MCPE-103399-dylib
+          path: MCPE-103399.dylib
