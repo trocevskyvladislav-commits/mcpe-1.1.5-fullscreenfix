@@ -1,8 +1,8 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
-// Переименовали 'class' в 'targetClass', чтобы не было конфликта с C++
 static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledSelector) {
     Method originalMethod = class_getInstanceMethod(targetClass, originalSelector);
     Method swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector);
@@ -11,50 +11,42 @@ static void swizzleMethod(Class targetClass, SEL originalSelector, SEL swizzledS
     }
 }
 
-@implementation UIScreen (FullscreenFix)
+@implementation UIView (EAGLFix)
 
-// 1. Возвращаем реальные физические границы матрицы
-- (CGRect)fake_bounds {
-    CGRect native = [self nativeBounds];
-    CGFloat scale = [self nativeScale];
-    if (scale <= 0) scale = [self scale];
-    if (scale <= 0) scale = 1.0;
-
-    // Переводим пиксели матрицы в точки UIKit
-    return CGRectMake(0, 0, native.size.width / scale, native.size.height / scale);
-}
-
-// 2. Убираем устаревшие рамки StatusBar / Safe Area отступов
-- (CGRect)fake_applicationFrame {
-    return [self fake_bounds];
-}
-
-@end
-
-@implementation UIView (FullscreenFixWindow)
-
-// 3. Форсируем растягивание главного представления окна на весь экран
-- (CGRect)fake_frame {
-    if ([self isKindOfClass:[UIWindow class]]) {
-        return [[UIScreen mainScreen] bounds];
+// Принудительное назначение корректного Scale Factor для Viewport OpenGL
+- (void)fake_didMoveToWindow {
+    [self fake_didMoveToWindow];
+    if ([self isKindOfClass:NSClassFromString(@"EAGLView")]) {
+        self.contentScaleFactor = [UIScreen mainScreen].nativeScale;
+        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     }
-    return [self fake_frame]; // Вызов оригинального метода после swizzling
 }
 
 @end
 
-// Точка входа: выполняем подмену методов при загрузке библиотеки в память
+@implementation CALayer (EAGLFixLayer)
+
+// Фикс слоя CAEAGLLayer для предотвращения нулевых Framebuffer
+- (void)fake_setBounds:(CGRect)bounds {
+    if ([self isKindOfClass:[CAEAGLLayer class]]) {
+        CGRect screenBounds = [UIScreen mainScreen].nativeBounds;
+        CGFloat scale = [UIScreen mainScreen].nativeScale;
+        if (scale > 0) {
+            bounds = CGRectMake(0, 0, screenBounds.size.width / scale, screenBounds.size.height / scale);
+        }
+    }
+    [self fake_setBounds:bounds];
+}
+
+@end
+
 __attribute__((constructor))
 static void init_fullscreen_fix(void) {
     @autoreleasepool {
-        Class screenClass = [UIScreen class];
+        // Swizzle UIView (EAGLView)
+        swizzleMethod([UIView class], @selector(didMoveToWindow), @selector(fake_didMoveToWindow));
         
-        // Подменяем bounds и applicationFrame
-        swizzleMethod(screenClass, @selector(bounds), @selector(fake_bounds));
-        swizzleMethod(screenClass, @selector(applicationFrame), @selector(fake_applicationFrame));
-        
-        // Подменяем frame для UIWindow
-        Class viewClass = [UIView class];
-        swizzleMethod(viewClass, @selector(frame), @selector(fake_frame));
+        // Swizzle CALayer (CAEAGLLayer)
+        swizzleMethod([CALayer class], @selector(setBounds:), @selector(fake_setBounds:));
     }
 }
