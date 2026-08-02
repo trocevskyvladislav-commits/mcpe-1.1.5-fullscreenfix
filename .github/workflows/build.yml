@@ -24,31 +24,57 @@ jobs:
           typedef int (*DobbyHookFn)(void *function_address, void *replace_call, void **origin_call);
           typedef void (*MSHookFunctionFn)(void *symbol, void *replace, void **result);
 
+          // Указатели на оригинальные функции MCPE 1.1.5
           bool (*orig_SignItem_useOn)(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ);
-          bool (*orig_Block_canBeReplaced)(void* block, void* region, int x, int y, int z);
-          int  (*orig_Block_getId)(void* block);
+          bool (*orig_BlockSource_setBlock)(void* blockSource, int x, int y, int z, void* block, int updateFlags);
+          void* (*orig_BlockSource_getBlock)(void* blockSource, int x, int y, int z);
+          void* (*orig_Player_getRegion)(void* player);
+          int (*orig_Block_getId)(void* block);
 
-          static bool g_IsPlacingSign = false;
           #define BEDROCK_ID 7
 
-          bool hook_Block_canBeReplaced(void* block, void* region, int x, int y, int z) {
-              if (g_IsPlacingSign) {
-                  if (block != NULL && orig_Block_getId != NULL) {
-                      int blockId = orig_Block_getId(block);
-                      if (blockId == BEDROCK_ID) {
-                          return false;
+          // Хук на использование таблички
+          bool hook_SignItem_useOn(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ) {
+              if (player != NULL) {
+                  // Получаем BlockSource (Region) игрока
+                  void* region = NULL;
+                  if (orig_Player_getRegion != NULL) {
+                      region = orig_Player_getRegion(player);
+                  }
+
+                  if (region != NULL) {
+                      // Вычисляем координаты блока, в который ставится табличка
+                      int targetX = x;
+                      int targetY = y;
+                      int targetZ = z;
+
+                      switch (face) {
+                          case 0: targetY--; break; // Bottom
+                          case 1: targetY++; break; // Top
+                          case 2: targetZ--; break; // North
+                          case 3: targetZ++; break; // South
+                          case 4: targetX--; break; // West
+                          case 5: targetX++; break; // East
+                      }
+
+                      // Проверяем текущий блок на целевых координатах
+                      if (orig_BlockSource_getBlock != NULL && orig_Block_getId != NULL) {
+                          void* currentBlock = orig_BlockSource_getBlock(region, targetX, targetY, targetZ);
+                          if (currentBlock != NULL) {
+                              int blockId = orig_Block_getId(currentBlock);
+                              
+                              // Если это НЕ бедрок и НЕ воздух (id 0) - форсированно стираем его (ставим воздух перед ставкой таблички)
+                              if (blockId != BEDROCK_ID && blockId != 0 && orig_BlockSource_setBlock != NULL) {
+                                  // Ставим воздух (NULL/0) по целевым координатам, "съедая" блок
+                                  orig_BlockSource_setBlock(region, targetX, targetY, targetZ, NULL, 3);
+                              }
+                          }
                       }
                   }
-                  return true;
               }
-              return orig_Block_canBeReplaced(block, region, x, y, z);
-          }
 
-          bool hook_SignItem_useOn(void* self, void* itemStack, void* player, int x, int y, int z, signed char face, float clickX, float clickY, float clickZ) {
-              g_IsPlacingSign = true;
-              bool result = orig_SignItem_useOn(self, itemStack, player, x, y, z, face, clickX, clickY, clickZ);
-              g_IsPlacingSign = false;
-              return result;
+              // Вызываем оригинальный SignItem::useOn, который теперь легко поставит табличку в очищенное место
+              return orig_SignItem_useOn(self, itemStack, player, x, y, z, face, clickX, clickY, clickZ);
           }
 
           bool install_hook(void* target, void* replace, void** origin) {
@@ -71,17 +97,20 @@ jobs:
 
           __attribute__((constructor))
           static void init_mcpe103399_patch() {
-              void* signUseOnSym     = dlsym(RTLD_DEFAULT, "__NK8SignItem5useOnER9ItemStackR6PlayeriiiEfff");
-              void* canBeReplacedSym = dlsym(RTLD_DEFAULT, "__NK5Block14canBeReplacedER11BlockSourceiii");
-              void* getIdSym         = dlsym(RTLD_DEFAULT, "__NK5Block5getIdEv");
+              // Символы MCPE 1.1.5
+              void* signUseOnSym  = dlsym(RTLD_DEFAULT, "__NK8SignItem5useOnER9ItemStackR6PlayeriiiEfff");
+              void* setBlockSym   = dlsym(RTLD_DEFAULT, "__ZN11BlockSource8setBlockEiiiRK5Blocki");
+              void* getBlockSym   = dlsym(RTLD_DEFAULT, "__NK11BlockSource8getBlockEiii");
+              void* getRegionSym  = dlsym(RTLD_DEFAULT, "__NK6Player9getRegionEv");
+              void* getIdSym      = dlsym(RTLD_DEFAULT, "__NK5Block5getIdEv");
 
-              if (getIdSym) {
-                  orig_Block_getId = (int (*)(void*))getIdSym;
-              }
+              if (setBlockSym) orig_BlockSource_setBlock = (bool (*)(void*, int, int, int, void*, int))setBlockSym;
+              if (getBlockSym) orig_BlockSource_getBlock = (void* (*)(void*, int, int, int))getBlockSym;
+              if (getRegionSym) orig_Player_getRegion = (void* (*)(void*))getRegionSym;
+              if (getIdSym) orig_Block_getId = (int (*)(void*))getIdSym;
 
-              if (signUseOnSym && canBeReplacedSym) {
+              if (signUseOnSym) {
                   install_hook(signUseOnSym, (void*)&hook_SignItem_useOn, (void**)&orig_SignItem_useOn);
-                  install_hook(canBeReplacedSym, (void*)&hook_Block_canBeReplaced, (void**)&orig_Block_canBeReplaced);
               }
           }
           EOF
