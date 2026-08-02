@@ -1,1 +1,9 @@
+name: Build Dylib
+
+on:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+...
 
