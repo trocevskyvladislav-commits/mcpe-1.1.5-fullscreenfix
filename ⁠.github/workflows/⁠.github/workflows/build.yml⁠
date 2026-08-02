@@ -1,0 +1,24 @@
+name: Build Dylib
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Compile dylib
+        run: |
+          xcrun -sdk iphoneos clang++ -dynamiclib -Wall \
+            -arch arm64 -miphoneos-version-min=12.0 \
+            FullscreenFix.mm \
+            -o FullscreenFix.dylib \
+            -framework Foundation -framework UIKit
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: FullscreenFix
+          path: FullscreenFix.dylib
