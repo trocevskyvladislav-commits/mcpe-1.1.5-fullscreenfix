@@ -1,5 +1,5 @@
-      - name: Create MCPE-103399.mm
-        run: |
+- name: Create MCPE-103399.mm
+      run: |
           cat << 'EOF' > MCPE-103399.mm
           #import <Foundation/Foundation.h>
           #import <dlfcn.h>
